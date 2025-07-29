@@ -1,11 +1,17 @@
 use crate::{
     capturer::{Area, Options, Point, Resolution, Size},
     frame::{BGRAFrame, Frame, FrameType},
-    targets::{self, get_scale_factor, Target},
+    targets::{self, Target},
 };
 use std::cmp;
 use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use windows::core::HSTRING;
+use windows::Foundation::Metadata::ApiInformation;
+use windows_capture::capture::Context;
+use windows_capture::settings::{
+    DirtyRegionSettings, MinimumUpdateIntervalSettings, SecondaryWindowSettings,
+};
 use windows_capture::{
     capture::{CaptureControl, GraphicsCaptureApiHandler},
     frame::Frame as WCFrame,
@@ -14,7 +20,6 @@ use windows_capture::{
     settings::{ColorFormat, CursorCaptureSettings, DrawBorderSettings, Settings as WCSettings},
     window::Window as WCWindow,
 };
-use windows_capture::capture::Context;
 
 #[derive(Debug)]
 struct Capturer {
@@ -152,11 +157,28 @@ pub fn create_capturer(options: &Options, tx: mpsc::Sender<Frame>) -> WCStream {
         false => CursorCaptureSettings::WithoutCursor,
     };
 
+    let is_border_api_supported = ApiInformation::IsPropertyPresent(
+        &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+        &HSTRING::from("IsBorderRequired"),
+    )
+    .unwrap_or(false);
+
+    let show_highlight = match is_border_api_supported {
+        true => match options.show_highlight {
+            true => DrawBorderSettings::WithBorder,
+            false => DrawBorderSettings::WithoutBorder,
+        },
+        false => DrawBorderSettings::Default,
+    };
+
     let settings = match target {
         Target::Display(display) => Settings::Display(WCSettings::new(
             WCMonitor::from_raw_hmonitor(display.raw_handle.0),
             show_cursor,
-            DrawBorderSettings::Default,
+            show_highlight,
+            SecondaryWindowSettings::Default,
+            MinimumUpdateIntervalSettings::Default,
+            DirtyRegionSettings::Default,
             color_format,
             FlagStruct {
                 tx,
@@ -166,7 +188,10 @@ pub fn create_capturer(options: &Options, tx: mpsc::Sender<Frame>) -> WCStream {
         Target::Window(window) => Settings::Window(WCSettings::new(
             WCWindow::from_raw_hwnd(window.raw_handle.0),
             show_cursor,
-            DrawBorderSettings::Default,
+            show_highlight,
+            SecondaryWindowSettings::Default,
+            MinimumUpdateIntervalSettings::Default,
+            DirtyRegionSettings::Default,
             color_format,
             FlagStruct {
                 tx,
@@ -182,7 +207,7 @@ pub fn create_capturer(options: &Options, tx: mpsc::Sender<Frame>) -> WCStream {
 }
 
 pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
-    let target = options
+    let _target = options
         .target
         .clone()
         .unwrap_or_else(|| Target::Display(targets::get_main_display()));
